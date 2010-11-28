@@ -1,67 +1,88 @@
 module LifeGraphics where
 
-import Random
-import Data.Bits
-import Graphics.X11.Xlib
-import System.Exit (exitWith, ExitCode(..))
-import Control.Concurrent (threadDelay)
-import GHC.Int
+import Graphics.UI.GLUT
+import Graphics.Rendering.OpenGL
 
+import Random
+import Data.IORef
 import qualified Life 
 
--- make it really random
+cellWidth = 10
 
-main :: IO ()
+data LifeInfo = LifeInfo { 
+    universe :: Life.Universe,
+    orthoSize :: Size
+  }
+
 main = do
-  dpy <- openDisplay ""
-  let dflt   = defaultScreen dpy
-      scr      = defaultScreenOfDisplay dpy
-      universe = Life.randomUniverse (mkStdGen 13) 80 80 
-  rootw <- rootWindow dpy dflt
-  win   <- mkUnmanagedWindow dpy scr rootw 0 0 800 800
-  fgcolor <- initColor dpy "green"
-  gc <- createGC dpy win
-  setForeground dpy gc fgcolor
+  (progName, _) <- getArgsAndInitialize
+  initialDisplayMode $= [DoubleBuffered]
+  createWindow progName
+  -- wrong
+  sz <- get windowSize
+  let width = outermostX' cellWidth sz
+  matrixMode $= Projection
+  loadIdentity
+  setOrtho width
 
-  mapWindow dpy win
-  updateWin dpy win gc universe
+  cColor <- randomColor
+  currentColor $= Color4 (head cColor) (head $ tail cColor) (last cColor) 1
 
-initColor :: Display -> String -> IO Pixel
-initColor dpy color = do
-  let colormap = defaultColormap dpy (defaultScreen dpy)
-  (apros, real) <- allocNamedColor dpy colormap color 
-  return $ color_pixel apros
+  universeM <- createRandomUniverse' ((\(Size x y)-> Size (x*2)(y*2)) width) 
+  universe <- newIORef LifeInfo { universe = universeM, orthoSize = width }
+  displayCallback $= display universe 
+  mainLoop
 
-getFillAction :: Display -> Drawable -> GC -> Dimension -> Dimension -> Life.Position -> IO ()
-getFillAction dpy win gc w h a = fillRectangle dpy win gc (fromIntegral x) (fromIntegral y) w h
-  where x = (fromIntegral $ fst a) * w 
-        y = (fromIntegral $ snd a) * h
+randomColor = do
+  gen <- newStdGen
+  return (map (\x -> (fromIntegral(x) :: Float) / 100) 
+    $ take 3 $ randomRs (0 :: Int, 90) gen)
+  
+{- 300 x 300 
+ -  300 / 10 $ / 2 = 15 
+ -    coordinates: -15 .. 15
+ -    universe: 30 x 30
+ -}
+outermostX' :: GLsizei -> Size -> Size 
+outermostX' w (Size x y) = Size ( x `div` w `div` 2 ) (y `div` w `div` 2)
 
-updateWin :: Display -> Window -> GC -> Life.Universe -> IO ()
-updateWin dpy win gc u = do
-  let next_universe = Life.nextUniverse u
-  sequence $ map (getFillAction dpy win gc 10 10) $ Life.activePositions u
-  sync dpy False
-  threadDelay (1 * 250000)
-  clearWindow dpy win
-  updateWin dpy win gc next_universe 
+setOrtho (Size x y) = ortho (cc(-x)) (cc(x)) (cc(-y)) (cc(y)) (cc(-x)) (cc(x))
+  where cc t = (fromIntegral t) :: GLdouble
 
-mkUnmanagedWindow :: Display
- -> Screen
- -> Window
- -> Position
- -> Position
- -> Dimension
- -> Dimension
- -> IO Window
-mkUnmanagedWindow dpy scr rw x y w h = do
- let visual = defaultVisualOfScreen scr
-     attrmask = cWOverrideRedirect .|. cWBorderPixel .|. cWBackPixel
- background_color <- initColor dpy "black"
- border_color <- initColor dpy "green"
- win <- allocaSetWindowAttributes $ \attributes -> do
-     set_override_redirect attributes True
-     set_background_pixel attributes background_color
-     set_border_pixel attributes border_color
-     createWindow dpy rw x y w h 1 (defaultDepthOfScreen scr) inputOutput visual attrmask attributes
- return win
+createRandomUniverse (Size x y) = Life.randomUniverse (mkStdGen 0) (fromIntegral x) (fromIntegral y)
+createRandomUniverse' (Size x y) = do
+  gen <- getStdGen
+  return (Life.randomUniverse gen (fromIntegral x) (fromIntegral y))
+
+idle universeInfo = do
+  uInfo <- get universeInfo
+  let u = universe uInfo
+  universeInfo $= uInfo { universe = Life.nextUniverse u, orthoSize = orthoSize uInfo }
+  postRedisplay Nothing
+
+display universeInfo = do
+  clear [ColorBuffer]
+  uInfo <- get universeInfo
+  let u = universe uInfo
+  sequence $ map (displayCell (orthoSize uInfo)) $ Life.activePositions u
+
+  flush
+  swapBuffers
+  addTimerCallback 300 $ idle universeInfo
+
+displayCell (Size xs ys) (x, y) = do 
+  renderPrimitive Quads $ mapM_ (\(x, y, z) -> vertex $ Vertex3 x y z) points
+    where points = [(xx, yy, 0), (xx+1, yy, 0), (xx+1, yy-1, 0), (xx, yy-1, 0)]
+          xx = fromIntegral(x) - xs
+          yy = ys - fromIntegral(y)
+
+displayAt s (x, y) displayFunc = preservingMatrix $ do 
+  translate $ Vector3 x y 0
+  displayFunc s (x, y)
+
+{- 
+ - TODO:
+ -  1. replace naive algorithm
+ -  2. find and replace stale state 
+ -  3. patterns 
+ -}
