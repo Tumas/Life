@@ -31,7 +31,6 @@ dimensionY = length
 
 cellAt :: Universe -> Position -> Cell
 cellAt u (x, y) = (!!) ((!!) u y) x 
-
 isVisible :: Universe -> Position -> Bool
 isVisible u p = x >= 0 && x < maxX && y >= 0 && y < maxY  
   where maxX = dimensionX u
