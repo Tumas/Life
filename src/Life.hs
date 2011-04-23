@@ -48,6 +48,7 @@ countNeighbours u p
         x = fst p 
         y = snd p
 
+
 nextUniverse :: Universe -> Universe
 nextUniverse u = foldr (processRow u) [] u 
   where processRow u r acc    = (foldr ((processCell u) (yy - (length acc))) [] r) : acc 
