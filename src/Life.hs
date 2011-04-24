@@ -1,93 +1,128 @@
-data QuadTree a = EmptyQuadTree | 
-                  RegionNode a  |
-                  QNode Int (QuadTree a) (QuadTree a) (QuadTree a) (QuadTree a) 
-                    deriving (Show, Read, Eq)
+module Life
+(
+  Universe,
+  Position,
+  randomUniverse, 
+  nextUniverse,
+  dimensionY,
+  dimensionX, 
+  activePositions,
 
-size :: QuadTree a -> Float
-size EmptyQuadTree          = 0
-size (RegionNode _)         = 1 
-size (QNode level _ _ _ _)  = 2 ** fromIntegral(level)
+  getAPG,
+  getB,
+  getNCount
+)
+where 
 
-singletonQ :: a -> QuadTree a
-singletonQ x = RegionNode x
+-- hacky and quite ugly attempt to save some memory
+--  TODO: test 
+--        optimize
 
-northWest :: QuadTree a -> QuadTree a
-northWest (QNode a nw ne sw se) = nw
+import Data.Bits
+import qualified Random (StdGen, random, randomRs)
 
-northEast :: QuadTree a -> QuadTree a
-northEast (QNode a nw ne sw se) = ne
+type Grid = Int
+type Position= (Int, Int)
+type Universe = [[Grid]]
 
-southWest :: QuadTree a -> QuadTree a
-southWest (QNode a nw ne sw se) = sw
+gridDimensionX :: Universe -> Int
+gridDimensionX = length . head
 
-southEast :: QuadTree a -> QuadTree a
-southEast (QNode a nw ne sw se) = se
+gridDimensionY :: Universe -> Int
+gridDimensionY = length 
 
-centeredSubNode :: QuadTree a -> QuadTree a
-centeredSubNode (QNode a nw ne sw se) = QNode a (southEast nw) (southWest ne) (northEast sw) (northWest se)
+dimensionX :: Universe -> Int 
+dimensionX = ((*) 3) . gridDimensionX 
 
-centeredSubSubNode :: QuadTree a -> QuadTree a
-centeredSubSubNode (QNode a nw ne sw se) = 
-  QNode a (southEast (southEast nw)) (southWest (southWest ne)) (northEast (northEast sw)) (northWest (northWest se))
+dimensionY :: Universe -> Int 
+dimensionY = ((*) 3) . gridDimensionY 
 
-centeredHorizontal :: QuadTree a -> QuadTree a -> QuadTree a
-centeredHorizontal w@(QNode a _ _ _ _) e = 
-  QNode a (northEast (southEast w)) (southWest (northWest e)) (northEast (southEast w)) (northWest (southWest e))
+getB :: Grid -> Int -> Int
+getB g p = (shiftR g p) .&. (1::Int)
 
-centeredVertical :: QuadTree a -> QuadTree a -> QuadTree a
-centeredVertical n@(QNode a _ _ _ _) s = 
-  QNode a (southWest (southEast n)) (southEast (southWest n)) (northWest (northEast s)) (northEast (northWest s))
+--getGrid :: Int -> Int -> Universe -> Position-> Grid
+--getGrid mx my u (-1, -1) = (!!) ((!!) u my) mx
+--getGrid mx my u (-1, gy) = (!!) ((!!) u gy) mx
+--getGrid mx my u (gx, -1) = (!!) ((!!) u my) gx
+--getGrid mx my u (gx, gy) = (!!) ((!!) u (gy `mod` (my+1))) (gx `mod` (mx+1)) 
 
-countNW :: QuadTree Int -> Int
-countNW (QNode _ nw ne sw se) = sum $ map (\(RegionNode x) -> x) [(northWest nw), (northEast nw), (southWest nw), 
-  (northWest ne), (southWest ne), (northWest se), (northEast sw), (northWest sw)]  
+getGrid mx my u gp@(gx, gy) = (!!) ((!!) u (gy `mod` (my+1))) (gx `mod` (mx+1))
 
-countNE :: QuadTree Int -> Int
-countNE (QNode _ nw ne sw se) = sum $ map (\(RegionNode x) -> x) [(northEast nw), (southEast nw), (northWest ne),
-  (northEast ne), (southEast ne), (northEast se), (northWest se), (northEast sw)]  
+applyRules :: Int -> Int -> Int 
+applyRules 0 3 = 1
+applyRules 0 _ = 0
+applyRules 1 2 = 1
+applyRules 1 3 = 1
+applyRules 1 _ = 0
 
-countSW :: QuadTree Int -> Int
-countSW (QNode _ nw ne sw se) = sum $ map (\(RegionNode x) -> x) [(southWest nw), (southEast nw), (northWest ne), 
-  (northWest se), (southWest se), (northWest sw), (southEast sw), (southWest sw)]  
+maxX :: Universe -> Int
+maxX u = (gridDimensionX u)-1
 
-countSE :: QuadTree Int -> Int
-countSE (QNode _ nw ne sw se) = sum $ map (\(RegionNode x) -> x) [(southEast nw), (southEast ne), (southWest ne), 
-  (northEast se), (southWest se), (southEast se), (northEast sw), (southEast sw)]  
+maxY :: Universe -> Int
+maxY u = (gridDimensionY u)-1
 
-judge :: QuadTree Int -> Int -> Int
-judge (RegionNode 0) 3 = 1
-judge (RegionNode 0) _ = 0
-judge (RegionNode 1) 2 = 1
-judge (RegionNode 1) 3 = 1
-judge (RegionNode 1) _ = 0
+countCornerEdge :: Int -> Grid -> Grid -> Grid -> Grid -> Int
+countCornerEdge l g h v c 
+  | l == 0 = sum [(gg 7), (gg 5), (gg 4), (gh 3), (gh 6), (gc 0), (gv 2), (gv 1)]
+  | l == 1 = sum [(gg 7), (gg 4), (gg 3), (gh 8), (gh 5), (gc 2), (gv 1), (gv 0)]
+  | l == 2 = sum [(gg 5), (gg 1), (gg 4), (gh 3), (gh 0), (gc 6), (gv 8), (gv 7)]
+  | l == 3 = sum [(gg 1), (gg 3), (gg 4), (gh 2), (gh 5), (gc 8), (gv 6), (gv 7)]
+  where gg = getB g
+        gh = getB h
+        gc = getB c
+        gv = getB v
 
-evolve :: QuadTree Int -> QuadTree Int
-evolve EmptyQuadTree                  = EmptyQuadTree
-evolve (QNode 2 nw ne sw se) = QNode 1
-  (RegionNode $ judge (southEast nw) (countNW nw))
-  (RegionNode $ judge (southWest ne) (countNE ne))
-  (RegionNode $ judge (northEast sw) (countSW sw))
-  (RegionNode $ judge (northWest se) (countSE se))
+countMiddleEdge :: Int -> Grid -> Grid -> Int
+countMiddleEdge l g n
+  | l == 0 = sum [(gg 3), (gg 5), (gg 4), (gg 8), (gg 6), (gn 0), (gn 2), (gn 1)]
+  | l == 1 = sum [(gg 0), (gg 1), (gg 4), (gg 7), (gg 6), (gn 8), (gn 2), (gn 5)]
+  | l == 2 = sum [(gg 0), (gg 2), (gg 3), (gg 4), (gg 5), (gn 6), (gn 7), (gn 8)]
+  | l == 3 = sum [(gg 1), (gg 2), (gg 4), (gg 8), (gg 7), (gn 0), (gn 3), (gn 6)]
+  where gg = getB g
+        gn = getB n
 
-evolve node@(QNode level nw ne sw se) = QNode (level-1)
-  (QNode (level-2) n00 n01 n10 n11) 
-  (QNode (level-2) n01 n02 n11 n12) 
-  (QNode (level-2) n10 n11 n20 n21) 
-  (QNode (level-2) n11 n12 n21 n22) 
+getNCount :: Int -> Int -> Universe -> Grid -> Position-> Position-> (Int, Int)
+getNCount mx my u g (gx, gy) lp@(lx, ly)
+  | lp == (0, 0) = ((gg 8), countCornerEdge 0 g (g' (gx-1, gy)) (g' (gx, gy-1)) (g' (gx-1, gy-1)))
+  | lp == (0, 1) = ((gg 5), countMiddleEdge 3 g (g' (gx-1, gy)))
+  | lp == (0, 2) = ((gg 2), countCornerEdge 2 g (g' (gx-1, gy)) (g' (gx, gy+1)) (g' (gx-1, gy+1)))
+  | lp == (1, 0) = ((gg 7), countMiddleEdge 0 g (g' (gx, gy-1)))
+  | lp == (1, 1) = ((gg 4), (sum $ map (getB g) [0, 1, 2, 3, 5, 6, 7, 8]))
+  | lp == (1, 2) = ((gg 1), countMiddleEdge 2 g (g' (gx, gy+1)))
+  | lp == (2, 0) = ((gg 6), countCornerEdge 1 g (g' (gx+1, gy)) (g' (gx, gy-1)) (g' (gx+1, gy-1)))
+  | lp == (2, 1) = ((gg 3), countMiddleEdge 1 g (g' (gx+1, gy)))
+  | lp == (2, 2) = ((gg 0), countCornerEdge 3 g (g' (gx+1, gy)) (g' (gx, gy+1)) (g' (gx+1, gy+1)))
+  where g' = getGrid mx my u
+        gg = getB g
+
+next :: Int -> Int -> Universe -> Position-> Grid -> Grid
+next mx my u (gx, gy) g = snd $ foldr (\(v, nc) (i, n) -> (i+1, if (applyRules v nc) == 1 then setBit (n::Int) i else n)) (0, 0) values 
   where 
-    n00 = centeredSubNode nw
-    n01 = centeredHorizontal nw ne
-    n02 = centeredSubNode ne
-    n10 = centeredVertical nw sw
-    n11 = centeredSubSubNode node
-    n12 = centeredVertical ne se
-    n20 = centeredSubNode sw
-    n21 = centeredHorizontal sw se
-    n22 = centeredSubNode se
+        values = map (getNCount' (gx, gy)) [(x,y) | y <- [0..2], x <- [0..2]]
+        getNCount' = getNCount mx my u g 
 
-createQTree :: a -> a -> a -> a -> QuadTree a
-createQTree x y z w = QNode 1 (singletonQ x) (singletonQ y) (singletonQ z) (singletonQ w)
+nextUniverse :: Universe -> Universe
+nextUniverse u = fst $ foldr processRow ([], 0) u
+  where 
+    processRow row (acc, y) = ((fst $ foldr (\g (acc', x) -> ( (next' (x, y) g) : acc', x+1)) ([], 0) row) : acc, y+1)
+    next' = next (maxX u) (maxY u) u
 
-formQTree :: QuadTree a -> QuadTree a -> QuadTree a -> QuadTree a -> QuadTree a
-formQTree r1@(RegionNode _) r2@(RegionNode _) r3@(RegionNode _) r4@(RegionNode _) = QNode 1 r1 r2 r3 r4  
-formQTree q1@(QNode l _ _ _ _) q2 q3 q4                                           = QNode (l+1) q1 q2 q3 q4
+randomUniverse :: Random.StdGen -> Int -> Int -> Universe
+randomUniverse _ _ 0  = []
+randomUniverse g x y  = 
+  let (_, newGen) = Random.random g :: (Int, Random.StdGen)
+  in (take x $ Random.randomRs (0, 511) g :: [Int]) : randomUniverse newGen x (y-1) 
+
+activePositions :: Universe -> [Position]
+activePositions u = fst $ foldr findActive ([], 0) u
+  where findActive r (acc, y) = ((fst $ foldr (\g (acc', x) -> ((getAPG (x, y) g)++ acc', x+1)) ([], 0) r) ++ acc, y+1)
+
+-- get active positions in grid
+getAPG :: Position -> Grid -> [Position]
+getAPG (gx, gy) 0 = []
+getAPG (gx, gy) g = filter (\(x, y) -> x >= 0) $ zipWith zipF pos coords
+  where
+    coords = [(x', y') | y' <- [2,1..0], x' <- [2,1..0]]
+    pos    = map (getB g) [0..8]
+    zipF 0 (lx, ly) = (-1, -1) 
+    zipF 1 (lx, ly) = (gx*3+lx, gy*3+ly)
